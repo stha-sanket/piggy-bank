@@ -1,1 +1,1 @@
-[{"id": 1767296535638, "name": "pokemon card", "price": 50.0, "image": "1767296535_pokemon.jpeg", "created_at": "2026-01-02 01:27:15"}]
+[{"id": 1767296535638, "name": "pokemon card", "price": 50.0, "image": "1767296535_pokemon.jpeg", "created_at": "2026-01-02 01:27:15"}, {"id": "1767301936.6719623", "name": "pokemon", "prize": 50.0, "image_base64": null, "created_at": "2026-01-02T02:57:16.671967", "rs2_needed": 25, "current_rs2": 0}]

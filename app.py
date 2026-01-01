@@ -1,191 +1,204 @@
-from flask import Flask, jsonify
-import serial
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
+import os
 import threading
 import time
-from datetime import datetime
-import glob
+from werkzeug.utils import secure_filename
+from serial_reader import coin_tracker
+from database import get_db_connection
 
 app = Flask(__name__)
+app.secret_key = 'your-secret-key-here'
+app.config['UPLOAD_FOLDER'] = 'static/uploads'
+app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024
 
-# Configuration
-def find_arduino_port():
-    """Find Arduino port automatically"""
-    ports = glob.glob('/dev/ttyUSB*') + glob.glob('/dev/ttyACM*')
-    for port in ports:
-        try:
-            s = serial.Serial(port)
-            s.close()
-            return port
-        except:
-            pass
-    return None
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 
-ARDUINO_PORT = find_arduino_port() or '/dev/ttyUSB0'
-BAUD_RATE = 115200
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# Global variables
-current_data = {
-    'weight': 0.0,
-    'max_2rs': 0,
-    'max_1rs': 0,
-    'total_2rs': 0,
-    'total_1rs': 0,
-    'last_update': None,
-    'connected': False
-}
-
-COIN_2RS_WEIGHT = 0.008
-COIN_1RS_WEIGHT = 0.006
-
-ser = None
-serial_thread = None
-running = False
-
-def calculate_coins(weight):
-    """Calculate coin counts based on weight"""
-    if weight <= 0.001:
-        return 0, 0, 0, 0
+# Background thread
+def serial_reader_thread():
+    if not coin_tracker.connect():
+        print("Using simulated data.")
+        return
     
-    max_2rs = int(weight / COIN_2RS_WEIGHT)
-    max_1rs = int(weight / COIN_1RS_WEIGHT)
-    total_2rs = max(0, int(round(weight / COIN_2RS_WEIGHT)))
-    total_1rs = max(0, int(round(weight / COIN_1RS_WEIGHT)))
-    
-    return max_2rs, max_1rs, total_2rs, total_1rs
+    print("Serial reader started")
+    while True:
+        coin_tracker.read_weight()
+        time.sleep(0.5)
 
-def parse_arduino_output(line):
-    """Parse Arduino serial output"""
-    try:
-        if "Weight:" in line:
-            parts = line.split("|")
-            
-            if len(parts) >= 1:
-                # Extract weight (first part before "g")
-                weight_part = parts[0].replace("Weight:", "").split("g")[0].strip()
-                weight = float(weight_part)
-                
-                # Calculate coins
-                max_2rs, max_1rs, total_2rs, total_1rs = calculate_coins(weight)
-                
-                # Update data
-                current_data.update({
-                    'weight': weight,
-                    'max_2rs': max_2rs,
-                    'max_1rs': max_1rs,
-                    'total_2rs': total_2rs,
-                    'total_1rs': total_1rs,
-                    'last_update': datetime.now().strftime("%H:%M:%S"),
-                    'connected': True
-                })
-                
-    except Exception as e:
-        print(f"Parse error: {e}")
-
-def serial_read_thread():
-    """Read from serial port"""
-    global ser, running
-    
-    while running:
-        try:
-            if ser and ser.is_open and ser.in_waiting:
-                line = ser.readline().decode('utf-8', errors='ignore').strip()
-                if line:
-                    print(f"Arduino: {line}")
-                    parse_arduino_output(line)
-        except Exception as e:
-            print(f"Serial error: {e}")
-            current_data['connected'] = False
-            time.sleep(2)
-        
-        time.sleep(0.1)
-
-def start_serial_connection():
-    """Start serial connection"""
-    global ser, serial_thread, running
-    
-    try:
-        ser = serial.Serial(ARDUINO_PORT, BAUD_RATE, timeout=1)
-        time.sleep(2)
-        ser.reset_input_buffer()
-        
-        running = True
-        serial_thread = threading.Thread(target=serial_read_thread)
-        serial_thread.daemon = True
-        serial_thread.start()
-        
-        print(f"Connected to Arduino on {ARDUINO_PORT}")
-        current_data['connected'] = True
-        return True
-        
-    except Exception as e:
-        print(f"Failed to connect to {ARDUINO_PORT}: {e}")
-        current_data['connected'] = False
-        return False
+thread = threading.Thread(target=serial_reader_thread, daemon=True)
+thread.start()
 
 @app.route('/')
 def index():
-    """Main page - inline HTML"""
-    return '''
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Piggy Bank Coin Counter</title>
-    </head>
-    <body>
-        <h1>Piggy Bank Coin Counter</h1>
+    # Read current weight
+    coin_tracker.read_weight()
+    
+    # Get coin data
+    coins_data = coin_tracker.calculate_rs2_coins()
+    
+    # Get goals
+    conn = get_db_connection()
+    goals_result = conn.execute('SELECT * FROM goals ORDER BY created_at DESC').fetchall()
+    conn.close()
+    
+    goals = []
+    for row in goals_result:
+        goal = dict(row)
         
-        <h2>Current Weight: <span id="weight">0.000</span> grams</h2>
+        try:
+            prize = float(goal['prize'])
+        except:
+            prize = 0.0
         
-        <h3>2 Rupees Coin (0.008g each):</h3>
-        <p>Maximum Possible Coins: <span id="max-2rs">0</span></p>
-        <p>Total Coins (Rounded): <span id="total-2rs">0</span></p>
+        # Current Rs.2 coins and value
+        current_rs2 = coins_data['rs2_count']
+        current_value = coins_data['rs2_value']
         
-        <h3>1 Rupee Coin (0.006g each):</h3>
-        <p>Maximum Possible Coins: <span id="max-1rs">0</span></p>
-        <p>Total Coins (Rounded): <span id="total-1rs">0</span></p>
+        # Calculate progress and Rs.2 needed
+        if prize > 0:
+            progress = min(100, (current_value / prize) * 100)
+            # Each Rs.2 gives ₹2, so divide remaining value by 2
+            remaining_value = max(0, prize - current_value)
+            rs2_needed = int(remaining_value / 2)
+            # Add one more if there's remainder
+            if remaining_value % 2 > 0:
+                rs2_needed += 1
+        else:
+            progress = 0
+            rs2_needed = 0
         
-        <p>Last Update: <span id="last-update">--:--:--</span></p>
-        <p>Status: <span id="status">Disconnected</span></p>
+        goal['progress'] = round(progress, 1)
+        goal['rs2_needed'] = rs2_needed
+        goal['current_rs2'] = current_rs2
+        goal['current_value'] = current_value
         
-        <script>
-            function updateData() {
-                fetch('/api/data')
-                    .then(response => response.json())
-                    .then(data => {
-                        document.getElementById('weight').textContent = data.weight.toFixed(3);
-                        document.getElementById('max-2rs').textContent = data.max_2rs;
-                        document.getElementById('total-2rs').textContent = data.total_2rs;
-                        document.getElementById('max-1rs').textContent = data.max_1rs;
-                        document.getElementById('total-1rs').textContent = data.total_1rs;
-                        document.getElementById('last-update').textContent = data.last_update;
-                        document.getElementById('status').textContent = data.connected ? 'Connected to Arduino' : 'Disconnected';
-                    });
-            }
-            
-            // Update every second
-            setInterval(updateData, 1000);
-            updateData();
-        </script>
-    </body>
-    </html>
-    '''
+        goals.append(goal)
+    
+    # Ensure all required keys exist in coins_data
+    if 'remaining_weight' not in coins_data:
+        coins_data['remaining_weight'] = 0.0
+    
+    return render_template('index.html',
+                         weight=coins_data.get('total_weight', coins_data.get('weight_used', 0)),
+                         coins_data=coins_data,
+                         goals=goals)
 
-@app.route('/api/data')
-def get_data():
-    """API endpoint for data"""
-    return jsonify(current_data)
+@app.route('/api/current_data')
+def api_current_data():
+    # Read fresh data
+    coin_tracker.read_weight()
+    
+    # Get coin data
+    coins_data = coin_tracker.calculate_rs2_coins()
+    
+    # Get goals
+    conn = get_db_connection()
+    goals_result = conn.execute('SELECT * FROM goals ORDER BY created_at DESC').fetchall()
+    conn.close()
+    
+    goals = []
+    for row in goals_result:
+        goal = dict(row)
+        
+        try:
+            prize = float(goal['prize'])
+        except:
+            prize = 0.0
+        
+        current_rs2 = coins_data['rs2_count']
+        current_value = coins_data['rs2_value']
+        
+        if prize > 0:
+            progress = min(100, (current_value / prize) * 100)
+            remaining_value = max(0, prize - current_value)
+            rs2_needed = int(remaining_value / 2)
+            if remaining_value % 2 > 0:
+                rs2_needed += 1
+        else:
+            progress = 0
+            rs2_needed = 0
+        
+        goal['progress'] = round(progress, 1)
+        goal['rs2_needed'] = rs2_needed
+        goal['current_rs2'] = current_rs2
+        
+        goals.append(goal)
+    
+    # Ensure all keys exist
+    if 'remaining_weight' not in coins_data:
+        coins_data['remaining_weight'] = 0.0
+    
+    return jsonify({
+        'success': True,
+        'weight': coins_data.get('total_weight', 0),
+        'coins_data': coins_data,
+        'goals': goals
+    })
+
+@app.route('/goals', methods=['GET', 'POST'])
+def manage_goals():
+    conn = get_db_connection()
+    
+    if request.method == 'POST':
+        name = request.form.get('name', '').strip()
+        prize = request.form.get('prize', '0').strip()
+        image = request.files.get('image')
+        
+        if not name:
+            flash('Goal name is required!', 'error')
+            return redirect(url_for('manage_goals'))
+        
+        if not prize or float(prize) <= 0:
+            flash('Prize amount must be greater than 0!', 'error')
+            return redirect(url_for('manage_goals'))
+        
+        image_path = None
+        if image and allowed_file(image.filename):
+            filename = secure_filename(image.filename)
+            os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+            image_path = f'uploads/{filename}'
+            image.save(os.path.join('static', image_path))
+        
+        conn.execute('INSERT INTO goals (name, prize, image_path) VALUES (?, ?, ?)',
+                    (name, prize, image_path))
+        conn.commit()
+        
+        flash('Goal added successfully!', 'success')
+        return redirect(url_for('manage_goals'))
+    
+    goals = conn.execute('SELECT * FROM goals ORDER BY created_at DESC').fetchall()
+    conn.close()
+    
+    return render_template('goals.html', goals=goals)
+
+@app.route('/goal/delete/<int:goal_id>', methods=['POST'])
+def delete_goal(goal_id):
+    conn = get_db_connection()
+    
+    goal = conn.execute('SELECT image_path FROM goals WHERE id = ?', (goal_id,)).fetchone()
+    
+    if goal and goal['image_path']:
+        image_path = os.path.join('static', goal['image_path'])
+        if os.path.exists(image_path):
+            os.remove(image_path)
+    
+    conn.execute('DELETE FROM goals WHERE id = ?', (goal_id,))
+    conn.commit()
+    conn.close()
+    
+    flash('Goal deleted successfully!', 'success')
+    return redirect(url_for('manage_goals'))
 
 if __name__ == '__main__':
-    print("=== Piggy Bank Coin Counter ===")
-    print(f"Looking for Arduino on: {ARDUINO_PORT}")
+    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
     
-    if start_serial_connection():
-        print("✓ Connected to Arduino")
-    else:
-        print("✗ Arduino not found")
-        print("Available ports:", glob.glob('/dev/ttyUSB*') + glob.glob('/dev/ttyACM*'))
+    print("=" * 50)
+    print("Piggy Bank Tracker - Rs.2 Coin Counter")
+    print("=" * 50)
+    print(f"Dashboard: http://localhost:5000")
+    print(f"Manage goals: http://localhost:5000/goals")
+    print("=" * 50)
     
-    print(f"\nOpen: http://localhost:5000")
-    print("================================\n")
-    
-    app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)
+    app.run(debug=True, host='0.0.0.0', port=5000)

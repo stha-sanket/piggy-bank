@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Khutruke</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#4f46e5', // indigo-600
+                        success: '#10b981', // emerald-500
+                    }
+                }
+            }
+        }
+    </script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <style>
+        .coin-icon { font-size: 4rem; }
+        @media (min-width: 768px) { .coin-icon { font-size: 6rem; } }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <!-- Status Indicator -->
+    <div id="status-indicator" class="fixed top-4 right-4 z-50 flex items-center gap-2 px-4 py-2 rounded-full bg-gray-500 text-white shadow-lg transition-all">
+        <i class="fas fa-spinner fa-spin"></i> Connecting...
+    </div>
+
+    <div class="container mx-auto px-4 py-8 max-w-7xl">
+        <!-- Header -->
+        <header class="text-center mb-10">
+            <h1 class="text-4xl md:text-5xl font-bold text-gray-800 mb-2">
+                <i class="fas fa-coins text-yellow-500 mr-3"></i> Smart Khutruke
+            </h1>
+            <p class="text-lg text-gray-600">Track your savings automatically by weight from Rs.2 coins</p>
+        </header>
+
+        <!-- Main Stats Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+            <!-- Current Weight -->
+            <div class="bg-white rounded-2xl shadow-lg p-6 text-center hover:shadow-xl transition-shadow">
+                <p class="text-sm text-gray-500 uppercase tracking-wide mb-2">Current Total Weight</p>
+                <p id="weight-value" class="text-5xl font-extrabold text-indigo-600">
+                    {{ "%.3f"|format(weight) if weight else "0.000" }}<span class="text-2xl">g</span>
+                </p>
+                <p class="text-xs text-gray-400 mt-4">Live reading from scale</p>
+            </div>
+
+            <!-- Rs.2 Coins Count -->
+            <div class="bg-white rounded-2xl shadow-lg p-6 text-center hover:shadow-xl transition-shadow">
+                <div class="flex justify-center mb-4">
+                    <i class="fas fa-coins coin-icon text-yellow-500"></i>
+                </div>
+                <p class="text-sm text-gray-500 uppercase tracking-wide mb-2">Detected Rs.2 Coins</p>
+                <p id="rs2-count" class="text-5xl font-extrabold text-success">
+                    {{ coins_data.rs2_count }}
+                </p>
+            </div>
+
+            <!-- Total Value -->
+            <div class="bg-white rounded-2xl shadow-lg p-6 text-center hover:shadow-xl transition-shadow">
+                <p class="text-sm text-gray-500 uppercase tracking-wide mb-2">Total Saved Value</p>
+                <p id="rs2-value" class="text-5xl font-extrabold text-primary">
+                    ₹{{ coins_data.rs2_value }}
+                </p>
+                <p class="text-xs text-gray-400 mt-4">From Rs.2 coins only</p>
+            </div>
+        </div>
+
+        <!-- Weight Breakdown -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
+            <div class="bg-white rounded-2xl shadow-lg p-6">
+                <h3 class="text-lg font-semibold text-gray-700 mb-4 flex items-center">
+                    <i class="fas fa-weight-hanging mr-2 text-indigo-500"></i> Weight Used for Rs.2 Coins
+                </h3>
+                <p id="weight-used" class="text-4xl font-bold text-success">
+                    {{ "%.3f"|format(coins_data.weight_used) }}g
+                </p>
+            </div>
+            <div class="bg-white rounded-2xl shadow-lg p-6">
+                <h3 class="text-lg font-semibold text-gray-700 mb-4 flex items-center">
+                    <i class="fas fa-balance-scale mr-2 text-amber-500"></i> Remaining / Other Weight
+                </h3>
+                <p id="remaining-weight" class="text-4xl font-bold text-amber-600">
+                    {{ "%.3f"|format(coins_data.remaining_weight) }}g
+                </p>
+            </div>
+        </div>
+
+        <!-- Savings Goals Section -->
+        <div class="bg-white rounded-2xl shadow-lg p-8">
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
+                <h2 class="text-2xl font-bold text-gray-800 flex items-center">
+                    <i class="fas fa-bullseye mr-3 text-primary"></i> Savings Goals
+                </h2>
+                <div class="flex items-center gap-4">
+                    <span class="px-4 py-2 bg-indigo-100 text-indigo-700 rounded-full font-medium">
+                        Current Rs.2 Coins: <span id="current-rs2-badge">{{ coins_data.rs2_count }}</span>
+                    </span>
+                    <a href="{{ url_for('manage_goals') }}" class="bg-primary hover:bg-indigo-700 text-white font-medium py-2 px-6 rounded-lg transition flex items-center gap-2">
+                        <i class="fas fa-plus"></i> Add Goal
+                    </a>
+                </div>
+            </div>
+
+            {% if goals %}
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {% for goal in goals %}
+                <div class="bg-gradient-to-br from-gray-50 to-gray-100 rounded-xl shadow-md overflow-hidden hover:shadow-lg transition-shadow">
+                    {% if goal.image_path %}
+                    <img src="{{ url_for('static', filename=goal.image_path) }}" alt="{{ goal.name }}" class="w-full h-48 object-cover">
+                    {% else %}
+                    <div class="w-full h-48 bg-gray-200 flex items-center justify-center">
+                        <i class="fas fa-gift text-6xl text-gray-400"></i>
+                    </div>
+                    {% endif %}
+                    <div class="p-6">
+                        <h3 class="text-xl font-semibold text-gray-800 mb-2">{{ goal.name }}</h3>
+                        <p class="text-gray-600 mb-4">Target: <span class="font-bold">₹{{ goal.prize }}</span></p>
+
+                        <!-- Progress Bar -->
+                        <div class="relative pt-1">
+                            <div class="flex mb-2 items-center justify-between">
+                                <div>
+                                    <span class="text-xs font-semibold inline-block text-primary">{{ goal.progress|round|int }}%</span>
+                                </div>
+                            </div>
+                            <div class="overflow-hidden h-4 mb-4 text-xs flex rounded-full bg-gray-200">
+                                <div style="width: {{ goal.progress }}%" class="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-gradient-to-r from-primary to-success transition-all duration-500"></div>
+                            </div>
+                        </div>
+
+                        <div class="flex justify-between text-sm text-gray-600 mb-4">
+                            <span>{{ goal.current_rs2 }} coins</span>
+                            <span>₹{{ goal.current_value }}</span>
+                        </div>
+
+                        <div class="p-3 rounded-lg {% if goal.rs2_needed > 0 %}bg-amber-100 text-amber-800{% else %}bg-green-100 text-green-800{% endif %}">
+                            {% if goal.rs2_needed > 0 %}
+                            <p class="font-semibold flex items-center gap-2">
+                                <i class="fas fa-exclamation-triangle"></i>
+                                {{ goal.rs2_needed }} more Rs.2 coins needed (₹{{ goal.rs2_needed * 2 }})
+                            </p>
+                            {% else %}
+                            <p class="font-semibold flex items-center gap-2">
+                                <i class="fas fa-check-circle"></i>
+                                Goal Achieved! 🎉
+                            </p>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="text-center py-16">
+                <i class="fas fa-chart-line text-6xl text-gray-300 mb-6"></i>
+                <h3 class="text-2xl font-medium text-gray-600 mb-4">No savings goals yet</h3>
+                <p class="text-gray-500 mb-8">Start motivating yourself by creating goals for your Rs.2 coin savings!</p>
+                <a href="{{ url_for('manage_goals') }}" class="bg-primary hover:bg-indigo-700 text-white font-medium py-3 px-8 rounded-lg text-lg transition inline-flex items-center gap-2">
+                    <i class="fas fa-plus"></i> Create Your First Goal
+                </a>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Footer Info -->
+        <div class="text-center mt-10 text-sm text-gray-500">
+            Auto-updates every 2 seconds •
+            Live weight: <span id="live-weight">{{ "%.3f"|format(weight) if weight else "0.000" }}</span>g •
+            <a href="/test/serial" class="text-primary hover:underline">Test Connection</a>
+        </div>
+    </div>
+
+    <script>
+        function updateData() {
+            fetch('/api/current_data')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        document.getElementById('weight-value').textContent = data.weight.toFixed(3) + 'g';
+                        document.getElementById('live-weight').textContent = data.weight.toFixed(3);
+                        document.getElementById('rs2-count').textContent = data.coins_data.rs2_count;
+                        document.getElementById('rs2-value').textContent = '₹' + data.coins_data.rs2_value;
+                        document.getElementById('weight-used').textContent = data.coins_data.weight_used.toFixed(3) + 'g';
+                        document.getElementById('remaining-weight').textContent = data.coins_data.remaining_weight.toFixed(3) + 'g';
+                        document.getElementById('current-rs2-badge').textContent = data.coins_data.rs2_count;
+
+                        const status = document.getElementById('status-indicator');
+                        status.className = 'fixed top-4 right-4 z-50 flex items-center gap-2 px-4 py-2 rounded-full bg-green-500 text-white shadow-lg';
+                        status.innerHTML = `<i class="fas fa-circle text-xs"></i> Live • ${data.coins_data.rs2_count} Rs.2 coins`;
+                    }
+                })
+                .catch(error => {
+                    console.error('Update error:', error);
+                    const status = document.getElementById('status-indicator');
+                    status.className = 'fixed top-4 right-4 z-50 flex items-center gap-2 px-4 py-2 rounded-full bg-red-500 text-white shadow-lg';
+                    status.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Connection Error';
+                });
+        }
+
+        updateData();
+        setInterval(updateData, 2000);
+        setTimeout(() => location.reload(), 30000);
+    </script>
+</body>
+</html>
