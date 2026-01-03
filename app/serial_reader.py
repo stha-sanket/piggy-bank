@@ -1,14 +1,16 @@
 import serial
 import serial.tools.list_ports
 import time
-from database import save_weight
+from .database import save_weight
+from .telegram_alerts import telegram_bot
 
 class CoinTracker:
     def __init__(self):
         self.ser = None
-        self.current_weight = 15.456  # Start with simulated weight
+        self.current_weight = 0.0
         self.connected = False
         self.port = None
+        self.last_stable_weight = 0.0
         
     def find_arduino_port(self):
         """Try to find Arduino port automatically"""
@@ -21,30 +23,24 @@ class CoinTracker:
             
         for port in ports:
             print(f"Found: {port.device} - {port.description}")
-            
-            # Try common ports
-            if 'USB' in port.description or 'ACM' in port.device:
+            if 'Arduino' in port.description:
+                print(f"✓ Found Arduino on {port.device}")
                 return port.device
         
-        # Return first port if none matched
-        return ports[0].device if ports else None
+        return '/dev/ttyACM1'  # Default to your Arduino port
     
     def connect(self):
         """Connect to Arduino"""
         try:
             self.port = self.find_arduino_port()
             
-            if not self.port:
-                print("No Arduino found. Using simulated data.")
-                return False
-            
             print(f"Connecting to {self.port} at 115200 baud...")
             self.ser = serial.Serial(
                 port=self.port,
                 baudrate=115200,
-                timeout=1
+                timeout=2
             )
-            time.sleep(2)
+            time.sleep(3)
             self.ser.flushInput()
             
             self.connected = True
@@ -53,44 +49,64 @@ class CoinTracker:
             
         except Exception as e:
             print(f"✗ Connection failed: {e}")
-            print("Using simulated data...")
             return False
     
     def read_weight(self):
-        """Read weight from Arduino"""
+        """Read weight from Arduino and check for DECREASES only"""
         if not self.connected or not self.ser or not self.ser.is_open:
-            # Return simulated data
-            self.current_weight = 15.456  # Simulated weight
-            return self.current_weight
-            
+            return None
+        
         try:
             if self.ser.in_waiting > 0:
                 line = self.ser.readline().decode('utf-8', errors='ignore').strip()
                 
-                # Debug
-                print(f"Raw from Arduino: {line}")
+                if not line:
+                    return None
                 
-                if line:
-                    # Remove 'g' if present
-                    if 'g' in line:
-                        line = line.replace('g', '').strip()
-                    
+                # Try to extract weight
+                weight = None
+                
+                # Method 1: Look for number with "g"
+                if 'g' in line:
+                    parts = line.split('g')[0].strip()
                     try:
-                        weight = float(line)
-                        weight = round(weight, 3)
-                        
+                        weight = float(parts)
+                    except:
+                        pass
+                
+                # Method 2: Look for any floating point number
+                if weight is None:
+                    import re
+                    numbers = re.findall(r'[-+]?\d*\.\d+|\d+', line)
+                    if numbers:
+                        try:
+                            weight = float(numbers[0])
+                        except:
+                            pass
+                
+                if weight is not None:
+                    weight = round(weight, 3)
+                    old_weight = self.current_weight
+                    
+                    # Only update if weight changed significantly
+                    if abs(weight - old_weight) > 0.001:
                         self.current_weight = weight
                         save_weight(weight)
                         
-                        print(f"✓ Weight: {weight} g")
+                        # Check for DECREASE (not increase)
+                        if weight < old_weight:
+                            print(f"🔻 Weight DECREASE: {old_weight:.3f}g -> {weight:.3f}g")
+                            # Send to Telegram for anomaly detection
+                            telegram_bot.update_weight(weight, old_weight)
+                        elif weight > old_weight:
+                            print(f"🔺 Weight increase: {old_weight:.3f}g -> {weight:.3f}g")
+                        
                         return weight
-                    except ValueError:
-                        print(f"Could not parse weight: {line}")
                         
         except Exception as e:
-            print(f"Serial error: {e}")
+            print(f"Serial read error: {e}")
             
-        return self.current_weight
+        return None
     
     def calculate_rs2_coins(self):
         """Calculate ONLY Rs.2 coins from weight"""
@@ -99,26 +115,19 @@ class CoinTracker:
         # Rs.2 coin weight: 8mg = 0.008g
         RS2_WEIGHT = 0.008
         
-        print(f"Calculating Rs.2 coins for weight: {weight}g")
-        
-        # Handle zero or negative weight
         if weight <= 0.001:
-            print("Weight too small, returning zero coins")
             return {
                 'rs2_count': 0,
                 'rs2_value': 0,
                 'weight_used': 0.0,
-                'remaining_weight': weight,
-                'total_weight': weight
+                'remaining_weight': 0.0,
+                'total_weight': 0.0
             }
         
-        # Simple calculation: weight / coin_weight
         rs2_count = int(weight / RS2_WEIGHT)
         weight_used = rs2_count * RS2_WEIGHT
         rs2_value = rs2_count * 2
         remaining_weight = weight - weight_used
-        
-        print(f"Rs.2 Coins: {rs2_count}, Value: ₹{rs2_value}")
         
         return {
             'rs2_count': rs2_count,

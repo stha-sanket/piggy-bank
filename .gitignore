@@ -1,2 +1,20 @@
+# Environments
 venv/
-.gitignore/
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Databases
+*.db
+*.sqlite3
+data/
+
+# Flask
+instance/
+
+# Uploads
+app/static/uploads/
