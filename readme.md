@@ -97,7 +97,3 @@ These instructions will get you a copy of the project up and running on your loc
 
 -   **Rs. 1 Coin:** (0.006g)
 -   **Rs. 2 Coin:** (0.008g)
-
-## Contributing
-
-Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
