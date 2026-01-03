@@ -95,8 +95,8 @@ These instructions will get you a copy of the project up and running on your loc
 
 ## Coin Weights
 
--   **Rs. 1 Coin:** ~6g (0.006kg)
--   **Rs. 2 Coin:** ~8g (0.008kg)
+-   **Rs. 1 Coin:** (0.006g)
+-   **Rs. 2 Coin:** (0.008g)
 
 ## Contributing
 
